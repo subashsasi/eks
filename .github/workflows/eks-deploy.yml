@@ -1,0 +1,82 @@
+name: "EKS Deploy"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  terraform:
+    name: "Terraform Apply & K8s Deploy"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fetch Terraform State from Branch
+        run: |
+          git fetch origin
+          if git show-ref --verify --quiet refs/remotes/origin/terraform-state; then
+            git checkout origin/terraform-state -- terraform.tfstate || true
+            echo "State file found and loaded."
+          else
+            echo "No existing state file found."
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+
+      - name: Save State to Branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create temporary folder to keep state file
+          mkdir -p /tmp/tfstate
+          cp terraform.tfstate /tmp/tfstate/terraform.tfstate || true
+          
+          # Checkout state branch (create if not exists)
+          git checkout -B terraform-state
+          
+          # Copy state file back
+          cp /tmp/tfstate/terraform.tfstate . || true
+          
+          git add terraform.tfstate
+          git commit -m "Update state [skip ci]" || echo "No changes to state"
+          git push origin terraform-state --force
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name sandbox-eks
+
+      - name: Verify Cluster Connection
+        run: |
+          kubectl get nodes
+          kubectl get namespaces
+
+      - name: Deploy Kubernetes Manifests
+        run: |
+          kubectl apply -f k8s-manifests/deployment.yaml
+          kubectl apply -f k8s-manifests/service.yaml
+
+      - name: Wait for Deployment & Get Diagnostics
+        run: |
+          echo "Waiting 60s for pod creation..."
+          sleep 60
+          kubectl get pods -o wide
+          kubectl get svc
+          kubectl describe deployment nginx-deployment

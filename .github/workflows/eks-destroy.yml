@@ -1,0 +1,57 @@
+name: "EKS Destroy"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  destroy:
+    name: "Terraform Destroy"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fetch Terraform State from Branch
+        run: |
+          git fetch origin
+          if git show-ref --verify --quiet refs/remotes/origin/terraform-state; then
+            git checkout origin/terraform-state -- terraform.tfstate
+            echo "State file loaded."
+          else
+            echo "Error: No state file found on branch terraform-state. Cannot destroy!"
+            exit 1
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+
+      - name: Save Empty/Destroyed State
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          mkdir -p /tmp/tfstate
+          cp terraform.tfstate /tmp/tfstate/terraform.tfstate || true
+          
+          git checkout -B terraform-state
+          cp /tmp/tfstate/terraform.tfstate . || true
+          
+          git add terraform.tfstate
+          git commit -m "Destroyed state [skip ci]" || echo "No changes"
+          git push origin terraform-state --force
