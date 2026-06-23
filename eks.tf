@@ -22,4 +22,9 @@ module "eks" {
   }
 
   enable_cluster_creator_admin_permissions = true
+
+  # Disable KMS and CloudWatch logs to avoid resource conflict errors in sandbox
+  create_kms_key            = false
+  cluster_encryption_config = {}
+  cluster_enabled_log_types = []
 }
